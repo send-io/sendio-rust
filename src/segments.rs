@@ -1,0 +1,242 @@
+use std::fmt;
+use std::sync::Arc;
+
+use reqwest::Method;
+
+use crate::{Config, Result, list_opts::ListOptions};
+use crate::{
+    list_opts::ListResponse,
+    types::{Contact, Segment},
+};
+
+use self::types::{CreateSegmentResponse, UpdateSegmentResponse};
+
+/// `Sendio` APIs for `/segments` endpoints.
+#[derive(Clone)]
+pub struct SegmentsSvc(pub(crate) Arc<Config>);
+
+impl SegmentsSvc {
+    /// Create a new segment for contacts to be added to.
+    ///
+    /// Returns an `id` of a created segment.
+    ///
+    /// <https://developer.send.io/docs/api>
+    #[maybe_async::maybe_async]
+    pub async fn create(&self, name: &str) -> Result<CreateSegmentResponse> {
+        let segment = types::CreateSegmentRequest {
+            name: name.to_owned(),
+        };
+
+        let request = self.0.build(Method::POST, "/segments");
+        let response = self.0.send(request.json(&segment)).await?;
+        let content = response.json::<CreateSegmentResponse>().await?;
+
+        Ok(content)
+    }
+
+    /// Retrieve a single segment.
+    ///
+    /// <https://developer.send.io/docs/api>
+    #[maybe_async::maybe_async]
+    pub async fn get(&self, id: &str) -> Result<Segment> {
+        let path = format!("/segments/{id}");
+
+        let request = self.0.build(Method::GET, &path);
+        let response = self.0.send(request).await?;
+        let content = response.json::<Segment>().await?;
+
+        Ok(content)
+    }
+
+    /// Update the name of an existing segment.
+    ///
+    /// <https://developer.send.io/docs/api>
+    #[maybe_async::maybe_async]
+    pub async fn update(&self, id: &str, name: &str) -> Result<UpdateSegmentResponse> {
+        let path = format!("/segments/{id}");
+
+        let segment = types::UpdateSegmentRequest {
+            name: name.to_owned(),
+        };
+
+        let request = self.0.build(Method::PATCH, &path);
+        let response = self.0.send(request.json(&segment)).await?;
+        let content = response.json::<UpdateSegmentResponse>().await?;
+
+        Ok(content)
+    }
+
+    /// Remove an existing segment.
+    ///
+    /// <https://developer.send.io/docs/api>
+    #[maybe_async::maybe_async]
+    pub async fn delete(&self, id: &str) -> Result<bool> {
+        let path = format!("/segments/{id}");
+
+        let request = self.0.build(Method::DELETE, &path);
+        let response = self.0.send(request).await?;
+        let content = response.json::<types::RemoveSegmentResponse>().await?;
+
+        Ok(content.deleted)
+    }
+
+    /// Retrieve a list of segments.
+    ///
+    /// - Default limit: no limit (return everything)
+    ///
+    /// <https://developer.send.io/docs/api>
+    #[maybe_async::maybe_async]
+    pub async fn list<T>(&self, list_opts: ListOptions<T>) -> Result<ListResponse<Segment>> {
+        let request = self.0.build(Method::GET, "/segments").query(&list_opts);
+        let response = self.0.send(request).await?;
+        let content = response.json::<ListResponse<Segment>>().await?;
+
+        Ok(content)
+    }
+
+    /// Retrieve a list of contacts in a segment.
+    ///
+    /// - Default limit: no limit (return everything)
+    ///
+    /// <https://developer.send.io/docs/api>
+    #[maybe_async::maybe_async]
+    pub async fn list_contacts<T>(
+        &self,
+        segment_id: &str,
+        list_opts: ListOptions<T>,
+    ) -> Result<ListResponse<Contact>> {
+        let path = format!("/segments/{segment_id}/contacts");
+
+        let request = self.0.build(Method::GET, &path).query(&list_opts);
+        let response = self.0.send(request).await?;
+        let content = response.json::<ListResponse<Contact>>().await?;
+
+        Ok(content)
+    }
+}
+
+impl fmt::Debug for SegmentsSvc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+#[allow(unreachable_pub)]
+pub mod types {
+    use serde::{Deserialize, Serialize};
+
+    crate::define_id_type!(SegmentId);
+
+    #[must_use]
+    #[derive(Debug, Clone, Serialize)]
+    pub struct CreateSegmentRequest {
+        /// The name of the segment you want to create.
+        pub name: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct CreateSegmentResponse {
+        /// The ID of the segment.
+        pub id: SegmentId,
+        /// The name of the segment.
+        pub name: String,
+    }
+
+    #[must_use]
+    #[derive(Debug, Clone, Serialize)]
+    pub struct UpdateSegmentRequest {
+        /// The new name for the segment.
+        pub name: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct UpdateSegmentResponse {
+        /// The ID of the segment.
+        pub id: SegmentId,
+    }
+
+    /// Name and ID of an existing contact list.
+    #[must_use]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Segment {
+        /// The ID of the segment.
+        pub id: SegmentId,
+        // /// The object of the segment.
+        // pub object: String,
+        /// The name of the segment.
+        pub name: String,
+        /// The date that the object was created.
+        pub created_at: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct RemoveSegmentResponse {
+        /// The ID of the segment.
+        #[allow(dead_code)]
+        pub id: SegmentId,
+        /// The deleted attribute indicates that the corresponding segment has been deleted.
+        pub deleted: bool,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::needless_return)]
+mod test {
+    #[cfg(not(feature = "blocking"))]
+    use crate::{
+        list_opts::ListOptions,
+        test::{CLIENT, DebugResult},
+    };
+
+    #[tokio_shared_rt::test(shared = true)]
+    #[serial_test::serial]
+    #[cfg(not(feature = "blocking"))]
+    #[ignore = "live API test; run with `cargo test -- --ignored` and SENDIO_API_KEY set"]
+    async fn all() -> DebugResult<()> {
+        let sendio = &*CLIENT;
+        let segment = "test_segments";
+
+        let created = sendio.segments.create(segment).await?;
+        let id = created.id;
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        let data = sendio.segments.get(&id).await?;
+        assert_eq!(data.name.as_str(), segment);
+
+        let renamed = "test_segments_renamed";
+        let updated = sendio.segments.update(&id, renamed).await?;
+        assert_eq!(updated.id, id);
+
+        let refetched = sendio.segments.get(&id).await?;
+        assert_eq!(refetched.name.as_str(), renamed);
+
+        let contacts = sendio
+            .segments
+            .list_contacts(&id, ListOptions::default())
+            .await?;
+        assert!(contacts.is_empty());
+
+        let segments = sendio.segments.list(ListOptions::default()).await?;
+        let segments_before = segments.len();
+        assert!(segments_before > 1);
+
+        let deleted = sendio.segments.delete(&id).await?;
+        assert!(deleted);
+
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_update_response() {
+        use crate::types::UpdateSegmentResponse;
+
+        let json = r#"{
+            "object": "segment",
+            "id": "b6d24b8e-af0b-4c3c-be0c-359bbd97381e"
+        }"#;
+
+        let res = serde_json::from_str::<UpdateSegmentResponse>(json)
+            .expect("valid UpdateSegmentResponse JSON");
+        assert_eq!(res.id.as_ref(), "b6d24b8e-af0b-4c3c-be0c-359bbd97381e");
+    }
+}

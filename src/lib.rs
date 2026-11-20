@@ -1,0 +1,380 @@
+#![forbid(unsafe_code)]
+#![doc = include_str!("../README.md")]
+//! ### Rate Limits
+//!
+//! Sendio implements rate limiting on their API which can sometimes get in the way of whatever
+//! you are trying to do. This crate handles that in 2 ways:
+//!
+//! - Firstly *all* requests made by the [`Sendio`] client are automatically rate limited to
+//!   9 req/1.1s to avoid collisions with the 10 req/s limit that Sendio imposes at the time of
+//!   writing this. Note that this can be changed by changing the `SENDIO_RATE_LIMIT` environment
+//!   variable (by default it is set to `9`).
+//!
+//!   Note that the client can be safely cloned as well as used in async/parallel contexts and the
+//!   rate limit will work as intended. The only exception to this is creating 2 clients via the
+//!   [`Sendio::new`] or [`Sendio::with_client`] methods which should be avoided, use `.clone()`
+//!   instead.
+//!
+//! - Secondly, a couple of helper methods as well as macros are implemented in the [`rate_limit`]
+//!   module that allow catching rate limit errors and retrying the request instead of failing.
+//!
+//!   These were implemented to handle cases where this crate is used in a horizontally scaled
+//!   environment and thus needs to work on different machines at the same time in which case the
+//!   internal rate limits alone cannot guarantee that there will be no rate limit errors.
+//!
+//!   As long as only one program is interacting with the Sendio servers on your behalf, this
+//!   module does not need to be used.
+//!
+//! ### Examples
+//!
+//! ```rust,no_run
+//! use sendio::types::{CreateEmailBaseOptions, Tag};
+//! use sendio::{Sendio, Result};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<()> {
+//!     let sendio = Sendio::default();
+//!
+//!     let from = "Acme <onboarding@a.dev>";
+//!     let to = ["delivered@send.io"];
+//!     let subject = "Hello World!";
+//!
+//!     let email = CreateEmailBaseOptions::new(from, to, subject)
+//!         .with_text("Hello World!")
+//!         .with_tag(Tag::new("hello", "world"));
+//!
+//!     let id = sendio.emails.send(email).await?.id;
+//!     println!("id: {id}");
+//!     Ok(())
+//! }
+//!
+//! ```
+
+pub use client::Sendio;
+pub use config::{Config, ConfigBuilder, DEFAULT_BASE_URL};
+pub use reqwest::Method;
+pub use serde_json::{Value, json};
+pub use webhooks::verify as verify_webhook;
+
+mod api_keys;
+mod automations;
+mod batch;
+mod broadcasts;
+mod client;
+mod config;
+mod contacts;
+mod domains;
+mod emails;
+mod error;
+pub mod events;
+pub mod idempotent;
+pub mod list_opts;
+mod logs;
+mod mailboxes;
+mod oauth;
+pub mod rate_limit;
+mod receiving;
+mod segments;
+mod suppressions;
+mod templates;
+mod topics;
+mod transactional;
+mod usage;
+mod webhooks;
+
+pub mod services {
+    //! `Sendio` API services.
+
+    pub use super::api_keys::ApiKeysSvc;
+    pub use super::automations::{AutomationTemplatesSvc, AutomationsSvc};
+    pub use super::batch::BatchSvc;
+    pub use super::broadcasts::BroadcastsSvc;
+    pub use super::contacts::ContactsSvc;
+    pub use super::domains::DomainsSvc;
+    pub use super::emails::EmailsSvc;
+    pub use super::logs::LogsSvc;
+    pub use super::mailboxes::MailboxesSvc;
+    pub use super::oauth::OAuthSvc;
+    pub use super::receiving::ReceivingSvc;
+    pub use super::segments::SegmentsSvc;
+    pub use super::suppressions::SuppressionsSvc;
+    pub use super::templates::TemplateSvc;
+    pub use super::topics::TopicsSvc;
+    pub use super::transactional::TransactionalSvc;
+    pub use super::usage::UsageSvc;
+}
+
+pub mod types {
+    //! Request and response types.
+
+    pub use super::api_keys::types::{
+        ApiKey, ApiKeyId, ApiKeyToken, CreateApiKeyOptions, Permission, UpdateApiKeyOptions,
+        UpdateApiKeyResponse,
+    };
+    pub use super::automations::types::{
+        AddToSegmentStepConfig, Automation, AutomationEmail, AutomationId, AutomationMinimal,
+        AutomationRun, AutomationRunId, AutomationSourceTemplate, AutomationStatus,
+        AutomationTemplate, AutomationTemplateCategory, AutomationTemplateDetail,
+        AutomationTemplateEmail, AutomationTemplateEvent, AutomationTemplateEventChoice,
+        AutomationTemplateEventMode, AutomationTemplateKind, AutomationTemplateParam,
+        AutomationTemplateParamType, AutomationTemplateSender, AutomationTemplateStep,
+        AutomationTemplateSummary, Connection, ConnectionType, CreateAutomationFromTemplateOptions,
+        CreateAutomationFromTemplateResponse, CreateAutomationOptions, CreateAutomationResponse,
+        DelayStepConfig, DeleteAutomationResponse, DuplicateAutomationResponse,
+        ListAutomationTemplatesResponse, SendEmailStepConfig, Step, StopAutomationResponse,
+        TriggerStepConfig, UpdateAutomationOptions, UpdateAutomationResponse,
+        WaitForEventStepConfig,
+    };
+    pub use super::batch::types::{
+        BatchValidation, PermissiveBatchErrors, SendEmailBatchPermissiveResponse,
+        SendEmailBatchResponse,
+    };
+    pub use super::broadcasts::types::{
+        Broadcast, BroadcastAudience, BroadcastClickedLink, BroadcastEstimate, BroadcastId,
+        BroadcastProgress, BroadcastRecipient, BroadcastRecipientBounceType,
+        BroadcastRecipientClickedLink, BroadcastRecipientEventType, BroadcastSkipped,
+        BroadcastStats, BroadcastTemplateEngine, BroadcastUnsubscribeScope, BroadcastVersion,
+        CancelBroadcastResponse, CreateBroadcastOptions, CreateBroadcastResponse,
+        DuplicateBroadcastResponse, EstimateBroadcastOptions, ListBroadcastsOptions,
+        ListRecipientsOptions, RemoveBroadcastResponse, SendBroadcastOptions,
+        SendBroadcastResponse, TestBroadcastResponse, UpdateBroadcastOptions,
+        UpdateBroadcastResponse, UpdateBroadcastVersionOptions,
+    };
+    pub use super::contacts::types::{
+        AddContactSegmentResponse, Contact, ContactChanges, ContactId, ContactImport,
+        ContactImportColumnMap, ContactImportCounts, ContactImportId, ContactImportOnConflict,
+        ContactImportPropertyMapping, ContactImportPropertyType, ContactImportStatus,
+        ContactImportTopic, ContactImportTopicSubscription, ContactProperty,
+        ContactPropertyChanges, ContactPropertyId, ContactTopic, CreateContactImportOptions,
+        CreateContactImportResponse, CreateContactOptions, CreateContactPropertyOptions,
+        CreateContactPropertyResponse, DeleteContactPropertyResponse, PropertyType,
+        RemoveContactSegmentResponse, SegmentObject, UpdateContactPropertyResponse,
+        UpdateContactTopicOptions,
+    };
+    pub use super::domains::types::{
+        CreateDomainOptions, DkimRecordType, Domain, DomainCapabilities, DomainCapabilitiesOptions,
+        DomainCapabilityStatus, DomainChanges, DomainDkimRecord, DomainId, DomainRecord,
+        DomainRecordStatus, DomainSpfRecord, DomainStatus, ProxyStatus, ReceivingRecord,
+        ReceivingRecordType, Region, SpfRecordType, Tls, UpdateDomainResponse,
+        VerifyDomainResponse,
+    };
+    pub use super::emails::types::{
+        Attachment, CancelScheduleResponse, ContentDisposition, ContentOrPath, CreateAttachment,
+        CreateEmailBaseOptions, CreateEmailResponse, Dimension, Email, EmailEvent, EmailId,
+        EmailMetrics, EmailMetricsDataPoint, EmailTemplate, GetEmailMetricsOptions, Metric,
+        MetricsGranularity, ShareEmailOptions, ShareEmailResponse, Tag, UpdateEmailOptions,
+        UpdateEmailResponse,
+    };
+    pub use super::error::types::{ErrorKind, ErrorResponse};
+    pub use super::events::types::{
+        ContactIdOrEmail, CreateEventOptions, CreateEventResponse, DeleteEventResponse,
+        GetEventResponse, SendEventOptions, SendEventResponse, UpdateEventOptions,
+        UpdateEventResponse,
+    };
+    pub use super::logs::types::{Log, LogId};
+    pub use super::mailboxes::types::{
+        CreateMailboxOptions, DeleteMailboxResponse, Mailbox, MailboxCredentials, MailboxHealth,
+        MailboxId, MailboxImapSmtp, MailboxKind, MailboxServer, ResetMailboxPasswordResponse,
+        UpdateMailboxOptions,
+    };
+    pub use super::oauth::types::{
+        ClientId, OAuthGrant, OAuthGrantClient, OAuthGrantId, RevokeOAuthGrantResponse,
+    };
+    pub use super::receiving::types::{
+        ForwardInboundEmailResponse, ForwardReceivingEmail, GetInboundEmailOptions,
+        GetInboundEmailRaw, InboundAttachment, InboundAttachmentId, InboundEmail,
+        InboundEmailHtmlFormat, InboundEmailId,
+    };
+    pub use super::segments::types::{
+        CreateSegmentResponse, Segment, SegmentId, UpdateSegmentResponse,
+    };
+    pub use super::suppressions::types::{
+        AddSuppressionOptions, AddSuppressionResponse, BatchAddSuppressionOptions,
+        BatchAddSuppressionResponse, BatchRemoveSuppressionOptions,
+        BatchRemoveSuppressionsResponse, EmailsSpecified, IdsSpecified, NotSpecified,
+        RemoveSuppressionResponse, Suppression, SuppressionId, SuppressionOrigin,
+    };
+    pub use super::templates::types::{
+        CreateTemplateOptions, CreateTemplateResponse, DeleteTemplateResponse,
+        DuplicateTemplateResponse, PublishTemplateResponse, Template, TemplateEvent, TemplateId,
+        UpdateTemplateOptions, UpdateTemplateResponse, Variable, VariableType,
+    };
+    pub use super::topics::types::{
+        CreateTopicOptions, CreateTopicResponse, DeleteTopicResponse, SubscriptionType, Topic,
+        TopicId, TopicVisibility, UpdateTopicOptions, UpdateTopicResponse,
+    };
+    pub use super::transactional::types::{
+        CreateTransactionalEmailOptions, DeleteTransactionalEmailResponse,
+        ListTransactionalEmailsOptions, SendTestTransactionalEmailOptions, TransactionalEmail,
+        TransactionalEmailId, TransactionalEmailStats, TransactionalEmailStatsOptions,
+        TransactionalEmailVariable, UpdateTransactionalEmailOptions,
+    };
+    pub use super::usage::types::{
+        AiCreditsUsage, AutomationRunsUsage, BroadcastsUsage, ContactsUsage, DomainsUsage,
+        EmailUsagePeriod, EmailsUsage, SegmentsUsage, Usage, UsageRateLimit,
+    };
+    pub use super::webhooks::types::{
+        CreateWebhookOptions, CreateWebhookResponse, DeleteWebhookResponse,
+        ReplayWebhookEventResponse, RotateWebhookSigningSecretResponse, UpdateWebhookOptions,
+        UpdateWebhookResponse, Webhook, WebhookEvent, WebhookEventAttempt, WebhookEventAttemptId,
+        WebhookEventAttemptListResponse, WebhookEventDetails, WebhookEventId,
+        WebhookEventListResponse, WebhookEventStatus, WebhookId, WebhookStatus,
+    };
+    pub use super::webhooks::types::{
+        DEFAULT_WEBHOOK_TOLERANCE, VerifyWebhookOptions, WebhookHeaders, WebhookVerificationError,
+    };
+}
+
+/// Error type for operations of a [`Sendio`] client.
+///
+/// <https://developer.send.io/docs/api>
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// Errors that may occur during the processing an HTTP request.
+    #[error("http error: {0}")]
+    Http(#[from] reqwest::Error),
+
+    /// Errors that may occur during the processing of the API request.
+    #[error("sendio error: {0}")]
+    Sendio(#[from] types::ErrorResponse),
+
+    /// Errors that may occur during the parsing of an API response.
+    #[error("Failed to parse Sendio API response. Received: \n{message}")]
+    Parse {
+        message: String,
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
+
+    /// Other more generic errors
+    #[error("{0}")]
+    Other(String),
+
+    /// Detailed rate limit error. For the old error variant see
+    /// [`types::ErrorKind::RateLimitExceeded`].
+    #[error("Too many requests. Limit is {ratelimit_limit:?} per {ratelimit_reset:?} seconds.")]
+    RateLimit {
+        ratelimit_limit: Option<u64>,
+        ratelimit_remaining: Option<u64>,
+        ratelimit_reset: Option<u64>,
+    },
+}
+
+macro_rules! define_id_type {
+    ($name:ident) => {
+        /// Unique identifier.
+        #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+        pub struct $name(ecow::EcoString);
+
+        impl $name {
+            #[inline]
+            #[must_use]
+            #[doc = concat!("Creates a new [`", stringify!($name), "`].")]
+            pub fn new(id: &str) -> Self {
+                Self(ecow::EcoString::from(id))
+            }
+        }
+
+        impl std::ops::Deref for $name {
+            type Target = str;
+
+            #[inline]
+            fn deref(&self) -> &Self::Target {
+                self.as_ref()
+            }
+        }
+
+        impl AsRef<str> for $name {
+            #[inline]
+            fn as_ref(&self) -> &str {
+                self.0.as_str()
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                std::fmt::Display::fmt(&self.0, f)
+            }
+        }
+    };
+}
+
+pub(crate) use define_id_type;
+
+/// Specialized [`Result`] type for an [`Error`].
+///
+/// [`Result`]: std::result::Result
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+#[cfg(test)]
+mod test {
+    use std::sync::LazyLock;
+
+    use crate::{Error, Sendio};
+
+    #[allow(dead_code, clippy::redundant_pub_crate)]
+    pub(crate) struct LocatedError<E: std::error::Error + 'static> {
+        inner: E,
+        location: &'static std::panic::Location<'static>,
+    }
+
+    impl From<Error> for LocatedError<Error> {
+        #[track_caller]
+        fn from(value: Error) -> Self {
+            Self {
+                inner: value,
+                location: std::panic::Location::caller(),
+            }
+        }
+    }
+
+    impl<T: std::error::Error + 'static> std::fmt::Debug for LocatedError<T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "{}:{}:{}\n{:?}",
+                self.location.file(),
+                self.location.line(),
+                self.location.column(),
+                self.inner
+            )
+        }
+    }
+
+    #[allow(clippy::redundant_pub_crate)]
+    pub(crate) type DebugResult<T, E = LocatedError<Error>> = Result<T, E>;
+
+    #[allow(clippy::redundant_pub_crate)]
+    /// Use this client in all tests to ensure rate limits are respected.
+    ///
+    /// Instantiate with:
+    /// ```
+    /// let sendio = &*CLIENT;
+    /// ```
+    pub(crate) static CLIENT: LazyLock<Sendio> = LazyLock::new(Sendio::default);
+
+    // <https://stackoverflow.com/a/77859502/12756474>
+    #[allow(dead_code, clippy::redundant_pub_crate)]
+    pub(crate) async fn retry<O, E, F>(
+        mut f: F,
+        retries: i32,
+        interval: std::time::Duration,
+    ) -> Result<O, E>
+    where
+        F: AsyncFnMut() -> Result<O, E>,
+    {
+        let mut count = 0;
+        loop {
+            match f().await {
+                Ok(output) => break Ok(output),
+                Err(e) => {
+                    println!("try {count} failed");
+                    count += 1;
+                    if count == retries {
+                        return Err(e);
+                    }
+                    tokio::time::sleep(interval).await;
+                }
+            }
+        }
+    }
+}

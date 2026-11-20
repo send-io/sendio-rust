@@ -1,0 +1,98 @@
+// Used:
+// axum = "0.8"
+// http-body-util = "0.1"
+
+use axum::{
+    Router,
+    body::Body,
+    extract::Request,
+    http,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::post,
+};
+
+use http::{HeaderMap, StatusCode};
+
+use http_body_util::BodyExt;
+use sendio::{
+    events::try_parse_event,
+    types::{VerifyWebhookOptions, WebhookHeaders},
+    verify_webhook,
+};
+
+#[allow(clippy::unwrap_used)]
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/", post(handler))
+        .layer(middleware::from_fn(verify_middleware));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+
+    println!("listening on {}", listener.local_addr().unwrap());
+
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn handler(data: String) -> StatusCode {
+    // Put your normal endpoint code here
+    let event = try_parse_event(&data);
+    println!("{event:?}");
+
+    StatusCode::OK
+}
+
+// Mostly taken from https://github.com/tokio-rs/axum/blob/main/examples/consume-body-in-extractor-or-middleware/src/main.rs
+async fn verify_middleware(
+    headers: HeaderMap,
+    request: Request,
+    next: Next,
+) -> Result<impl IntoResponse, AppError> {
+    let (parts, body) = request.into_parts();
+
+    let bytes = body
+        .collect()
+        .await
+        .map_err(|_e| AppError::BodyCollect)?
+        .to_bytes();
+
+    let payload = std::str::from_utf8(&bytes).map_err(|_e| AppError::WebhookVerify)?;
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+    };
+    let webhook_headers = WebhookHeaders {
+        id: header("svix-id"),
+        timestamp: header("svix-timestamp"),
+        signature: header("svix-signature"),
+    };
+
+    let secret = std::env::var("SENDIO_WEBHOOK_SECRET").unwrap_or_default();
+    verify_webhook(VerifyWebhookOptions::new(payload, webhook_headers, &secret))
+        .map_err(|_e| AppError::WebhookVerify)?;
+
+    let request = Request::from_parts(parts, Body::from(bytes));
+
+    Ok(next.run(request).await)
+}
+
+#[derive(Debug)]
+enum AppError {
+    BodyCollect,
+    WebhookVerify,
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            Self::BodyCollect => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to collect body"),
+            Self::WebhookVerify => (StatusCode::BAD_REQUEST, "Webhook verification failed"),
+        };
+        (status, message).into_response()
+    }
+}

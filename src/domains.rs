@@ -1,0 +1,919 @@
+use std::fmt;
+use std::sync::Arc;
+
+use reqwest::Method;
+use types::DeleteDomainResponse;
+
+use crate::{Config, Result, domains::types::VerifyDomainResponse};
+use crate::{
+    list_opts::{ListOptions, ListResponse},
+    types::{CreateDomainOptions, Domain, DomainChanges},
+};
+
+use self::types::UpdateDomainResponse;
+
+/// `Sendio` APIs for `/domains` endpoints.
+#[derive(Clone)]
+pub struct DomainsSvc(pub(crate) Arc<Config>);
+
+impl DomainsSvc {
+    /// Creates a domain through the Sendio Email API.
+    ///
+    /// <https://developer.send.io/docs/api>
+    #[maybe_async::maybe_async]
+    pub async fn create(&self, domain: CreateDomainOptions) -> Result<Domain> {
+        let request = self.0.build(Method::POST, "/domains");
+        let response = self.0.send(request.json(&domain)).await?;
+        let content = response.json::<Domain>().await?;
+
+        Ok(content)
+    }
+
+    /// Retrieves a single domain for the authenticated user.
+    ///
+    /// <https://developer.send.io/docs/api>
+    #[maybe_async::maybe_async]
+    pub async fn get(&self, domain_id: &str) -> Result<Domain> {
+        let path = format!("/domains/{domain_id}");
+
+        let request = self.0.build(Method::GET, &path);
+        let response = self.0.send(request).await?;
+        let content = response.json::<Domain>().await?;
+
+        Ok(content)
+    }
+
+    /// Verifies an existing domain.
+    ///
+    /// <https://developer.send.io/docs/api>
+    #[maybe_async::maybe_async]
+    pub async fn verify(&self, domain_id: &str) -> Result<VerifyDomainResponse> {
+        let path = format!("/domains/{domain_id}/verify");
+
+        let request = self.0.build(Method::POST, &path);
+        let response = self.0.send(request).await?;
+        let content = response.json::<VerifyDomainResponse>().await?;
+
+        Ok(content)
+    }
+
+    /// Updates an existing domain.
+    ///
+    /// <https://developer.send.io/docs/api>
+    #[maybe_async::maybe_async]
+    pub async fn update(
+        &self,
+        domain_id: &str,
+        update: DomainChanges,
+    ) -> Result<UpdateDomainResponse> {
+        let path = format!("/domains/{domain_id}");
+
+        let request = self.0.build(Method::PATCH, &path);
+        let response = self.0.send(request.json(&update)).await?;
+        let content = response.json::<UpdateDomainResponse>().await?;
+
+        Ok(content)
+    }
+
+    /// Retrieves a list of domains for the authenticated user.
+    ///
+    /// - Default limit: no limit (return everything)
+    ///
+    /// <https://developer.send.io/docs/api>
+    #[maybe_async::maybe_async]
+    pub async fn list<T>(&self, list_opts: ListOptions<T>) -> Result<ListResponse<Domain>> {
+        let request = self.0.build(Method::GET, "/domains").query(&list_opts);
+        let response = self.0.send(request).await?;
+        let content = response.json::<ListResponse<Domain>>().await?;
+
+        Ok(content)
+    }
+
+    /// Removes an existing domain.
+    ///
+    /// Returns whether the domain was deleted successfully.
+    ///
+    /// <https://developer.send.io/docs/api>
+    #[maybe_async::maybe_async]
+    pub async fn delete(&self, domain_id: &str) -> Result<DeleteDomainResponse> {
+        let path = format!("/domains/{domain_id}");
+
+        let request = self.0.build(Method::DELETE, &path);
+        let response = self.0.send(request).await?;
+        let content = response.json::<DeleteDomainResponse>().await?;
+
+        Ok(content)
+    }
+}
+
+impl fmt::Debug for DomainsSvc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+#[allow(unreachable_pub)]
+pub mod types {
+    use serde::{Deserialize, Serialize};
+    use serde_json::Value;
+
+    #[derive(Debug, Copy, Clone, Serialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum Tls {
+        /// Enforced TLS on the other hand, requires that the email communication must use TLS no
+        /// matter what. If the receiving server does not support TLS, the email will not be sent.
+        Enforced,
+        /// Opportunistic TLS means that it always attempts to make a secure connection to the
+        /// receiving mail server. If it can’t establish a secure connection, it sends the message
+        /// unencrypted.
+        Opportunistic,
+    }
+
+    crate::define_id_type!(DomainId);
+
+    /// Details of a new [`Domain`].
+    #[must_use]
+    #[derive(Debug, Clone, Serialize)]
+    pub struct CreateDomainOptions {
+        /// The name of the domain you want to create.
+        #[serde(rename = "name")]
+        name: String,
+        /// The region where the email will be sent from.
+        ///
+        /// Possible values are `'us-east-1' | 'eu-west-1' | 'sa-east-1' | 'ap-northeast-1'`.
+        #[serde(rename = "region", skip_serializing_if = "Option::is_none")]
+        region: Option<Region>,
+        /// For advanced use cases, choose a subdomain for the Return-Path address.
+        /// The custom return path is used for SPF authentication, DMARC alignment, and handling
+        /// bounced emails. Defaults to `send` (i.e., `send.yourdomain.tld`). Avoid setting values
+        /// that could undermine credibility (e.g. `testing`), as they may be exposed to recipients.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        custom_return_path: Option<String>,
+
+        #[serde(skip_serializing_if = "Option::is_none")]
+        open_tracking: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        click_tracking: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tracking_subdomain: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tls: Option<Tls>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        capabilities: Option<Value>,
+    }
+
+    impl CreateDomainOptions {
+        /// Creates a new [`CreateDomainOptions`].
+        ///
+        /// - `name`: The name of the domain you want to create.
+        #[inline]
+        pub fn new(name: &str) -> Self {
+            Self {
+                name: name.to_owned(),
+                region: None,
+                custom_return_path: None,
+
+                open_tracking: None,
+                click_tracking: None,
+                tracking_subdomain: None,
+                tls: None,
+                capabilities: None,
+            }
+        }
+
+        /// The region where the email will be sent from.
+        #[inline]
+        pub fn with_region(mut self, region: impl Into<Region>) -> Self {
+            self.region = Some(region.into());
+            self
+        }
+
+        /// For advanced use cases, choose a subdomain for the Return-Path address.
+        /// The custom return path is used for SPF authentication, DMARC alignment, and handling
+        /// bounced emails. Defaults to `send` (i.e., `send.yourdomain.tld`). Avoid setting values
+        /// that could undermine credibility (e.g. `testing`), as they may be exposed to recipients.
+        #[inline]
+        pub fn with_custom_return_path(mut self, custom_return_path: impl Into<String>) -> Self {
+            self.custom_return_path = Some(custom_return_path.into());
+            self
+        }
+
+        #[inline]
+        pub fn with_open_tracking(mut self, open_tracking: bool) -> Self {
+            self.open_tracking = Some(open_tracking);
+            self
+        }
+
+        #[inline]
+        pub fn with_click_tracking(mut self, click_tracking: bool) -> Self {
+            self.click_tracking = Some(click_tracking);
+            self
+        }
+
+        #[inline]
+        pub fn with_tracking_subdomain(mut self, tracking_subdomain: impl Into<String>) -> Self {
+            self.tracking_subdomain = Some(tracking_subdomain.into());
+            self
+        }
+
+        #[inline]
+        pub fn with_tls(mut self, tls: Tls) -> Self {
+            self.tls = Some(tls);
+            self
+        }
+
+        /// Sets the domain's capabilities, typically to turn receiving on:
+        /// `DomainCapabilitiesOptions::new().with_receiving(DomainCapabilityStatus::Enabled)`.
+        /// A raw [`Value`] is still accepted.
+        ///
+        /// See [`DomainCapabilitiesOptions`] for what each setting does.
+        #[inline]
+        pub fn with_capabilities(mut self, capabilities: impl Into<Value>) -> Self {
+            self.capabilities = Some(capabilities.into());
+            self
+        }
+    }
+
+    /// Capabilities to set on a domain, sent as `capabilities` when creating
+    /// ([`CreateDomainOptions::with_capabilities`]) or updating
+    /// ([`DomainChanges::with_capabilities`]) it. Unset fields are not sent.
+    ///
+    /// - `receiving`: [`DomainCapabilityStatus::Enabled`] makes send.io accept email for the
+    ///   domain (add its MX record). [`DomainCapabilityStatus::Disabled`] stops accepting email
+    ///   for it; remove the MX record afterwards. Turning receiving on in an update asks for the
+    ///   domain's MX record; publish it to start receiving email.
+    /// - `sending`: can't be disabled; [`DomainCapabilityStatus::Disabled`] is rejected with 422.
+    #[must_use]
+    #[derive(Debug, Default, Clone, Copy, Serialize)]
+    pub struct DomainCapabilitiesOptions {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sending: Option<DomainCapabilityStatus>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        receiving: Option<DomainCapabilityStatus>,
+    }
+
+    impl DomainCapabilitiesOptions {
+        /// Creates an empty [`DomainCapabilitiesOptions`].
+        #[inline]
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        /// Sets `sending`. Only [`DomainCapabilityStatus::Enabled`] is accepted by the API.
+        #[inline]
+        pub const fn with_sending(mut self, status: DomainCapabilityStatus) -> Self {
+            self.sending = Some(status);
+            self
+        }
+
+        /// Turns receiving on or off. Off stops send.io accepting email for the domain (remove
+        /// its MX record); on in an update asks for the domain's MX record (publish it to start
+        /// receiving email).
+        #[inline]
+        pub const fn with_receiving(mut self, status: DomainCapabilityStatus) -> Self {
+            self.receiving = Some(status);
+            self
+        }
+    }
+
+    impl From<DomainCapabilitiesOptions> for Value {
+        fn from(capabilities: DomainCapabilitiesOptions) -> Self {
+            let sending = capabilities
+                .sending
+                .map(|status| ("sending".to_owned(), Self::from(status)));
+            let receiving = capabilities
+                .receiving
+                .map(|status| ("receiving".to_owned(), Self::from(status)));
+            Self::Object(sending.into_iter().chain(receiving).collect())
+        }
+    }
+
+    impl From<DomainCapabilityStatus> for Value {
+        fn from(status: DomainCapabilityStatus) -> Self {
+            Self::String(
+                match status {
+                    DomainCapabilityStatus::Enabled => "enabled",
+                    DomainCapabilityStatus::Disabled => "disabled",
+                }
+                .to_owned(),
+            )
+        }
+    }
+
+    /// Region where [`CreateEmailBaseOptions`]s will be sent from.
+    ///
+    /// Possible values are 'us-east-1' | 'eu-west-1' | 'sa-east-1' | 'ap-northeast-1'.
+    ///
+    /// [`CreateEmailBaseOptions`]: crate::types::CreateEmailBaseOptions
+    #[non_exhaustive]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub enum Region {
+        /// 'us-east-1'
+        #[serde(rename = "us-east-1")]
+        UsEast1,
+        /// 'eu-west-1'
+        #[serde(rename = "eu-west-1")]
+        EuWest1,
+        /// 'sa-east-1'
+        #[serde(rename = "sa-east-1")]
+        SaEast1,
+        /// 'ap-northeast-1'
+        #[serde(rename = "ap-northeast-1")]
+        ApNorthEast1,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct DomainSpfRecord {
+        /// The name of the record.
+        pub name: String,
+        /// The value of the record.
+        pub value: String,
+        /// The type of record.
+        #[serde(rename = "type")]
+        pub r#type: SpfRecordType,
+        /// The time to live for the record.
+        pub ttl: String,
+        /// The status of the record.
+        pub status: DomainRecordStatus,
+        /// The record name relative to the domain's DNS zone (`dns_zone`):
+        /// what to type into the DNS provider. `name` stays relative to the domain.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub host: Option<String>,
+        /// The complete record name, such as `send.mail.acme.com`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub full_name: Option<String>,
+
+        pub routing_policy: Option<String>,
+        pub priority: Option<i32>,
+        pub proxy_status: Option<ProxyStatus>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct DomainDkimRecord {
+        /// The name of the record.
+        pub name: String,
+        /// The value of the record.
+        pub value: String,
+        /// The type of record.
+        #[serde(rename = "type")]
+        pub r#type: DkimRecordType,
+        /// The time to live for the record.
+        pub ttl: String,
+        /// The status of the record.
+        pub status: DomainRecordStatus,
+        /// The record name relative to the domain's DNS zone (`dns_zone`):
+        /// what to type into the DNS provider. `name` stays relative to the domain.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub host: Option<String>,
+        /// The complete record name, such as `send.mail.acme.com`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub full_name: Option<String>,
+
+        pub routing_policy: Option<String>,
+        pub priority: Option<i32>,
+        pub proxy_status: Option<ProxyStatus>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ReceivingRecord {
+        /// The name of the record.
+        pub name: String,
+        /// The value of the record.
+        pub value: String,
+        /// The type of record.
+        #[serde(rename = "type")]
+        pub r#type: ReceivingRecordType,
+        /// The time to live for the record.
+        pub ttl: String,
+        /// The status of the record.
+        pub status: DomainRecordStatus,
+        /// The record name relative to the domain's DNS zone (`dns_zone`):
+        /// what to type into the DNS provider. `name` stays relative to the domain.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub host: Option<String>,
+        /// The complete record name, such as `send.mail.acme.com`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub full_name: Option<String>,
+
+        pub priority: i32,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct TrackingRecord {
+        /// The name of the record.
+        pub name: String,
+        /// The value of the record.
+        pub value: String,
+        /// The type of record.
+        #[serde(rename = "type")]
+        pub r#type: TrackingRecordType,
+        /// The time to live for the record.
+        pub ttl: String,
+        /// The status of the record.
+        pub status: DomainRecordStatus,
+        /// The record name relative to the domain's DNS zone (`dns_zone`):
+        /// what to type into the DNS provider. `name` stays relative to the domain.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub host: Option<String>,
+        /// The complete record name, such as `send.mail.acme.com`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub full_name: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct TrackingCaaRecord {
+        /// The name of the record.
+        pub name: String,
+        /// The value of the record (e.g. `0 issue "amazon.com"`).
+        pub value: String,
+        /// The type of record.
+        #[serde(rename = "type")]
+        pub r#type: TrackingCaaRecordType,
+        /// The time to live for the record.
+        pub ttl: String,
+        /// The status of the record.
+        pub status: DomainRecordStatus,
+        /// The record name relative to the domain's DNS zone (`dns_zone`):
+        /// what to type into the DNS provider. `name` stays relative to the domain.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub host: Option<String>,
+        /// The complete record name, such as `send.mail.acme.com`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub full_name: Option<String>,
+    }
+
+    #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+    pub enum ReceivingRecordType {
+        #[allow(clippy::upper_case_acronyms)]
+        MX,
+    }
+
+    #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+    pub enum TrackingRecordType {
+        #[allow(clippy::upper_case_acronyms)]
+        CNAME,
+    }
+
+    #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+    pub enum TrackingCaaRecordType {
+        #[allow(clippy::upper_case_acronyms)]
+        CAA,
+    }
+
+    #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+    pub enum ProxyStatus {
+        Enable,
+        Disable,
+    }
+
+    #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum DomainStatus {
+        Pending,
+        Verified,
+        Failed,
+        NotStarted,
+        PartiallyVerified,
+        PartiallyFailed,
+    }
+
+    #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum DomainRecordStatus {
+        Pending,
+        Verified,
+        Failed,
+        TemporaryFailure,
+        NotStarted,
+    }
+
+    #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+    pub enum SpfRecordType {
+        MX,
+        #[allow(clippy::upper_case_acronyms)]
+        TXT,
+        #[allow(clippy::upper_case_acronyms)]
+        CNAME,
+    }
+
+    #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+    pub enum DkimRecordType {
+        #[allow(clippy::upper_case_acronyms)]
+        CNAME,
+        #[allow(clippy::upper_case_acronyms)]
+        TXT,
+    }
+
+    /// Individual [`Domain`] record.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(tag = "record")]
+    pub enum DomainRecord {
+        #[serde(rename = "SPF")]
+        DomainSpfRecord(DomainSpfRecord),
+        #[serde(rename = "DKIM")]
+        DomainDkimRecord(DomainDkimRecord),
+        #[serde(rename = "Receiving MX")]
+        ReceivingRecord(ReceivingRecord),
+        #[serde(rename = "Tracking")]
+        TrackingRecord(TrackingRecord),
+        #[serde(rename = "TrackingCAA")]
+        TrackingCaaRecord(TrackingCaaRecord),
+    }
+
+    /// Details of an existing domain.
+    #[must_use]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Domain {
+        /// The ID of the domain.
+        pub id: DomainId,
+        /// The name of the domain.
+        pub name: String,
+        /// The status of the domain.
+        pub status: DomainStatus,
+
+        /// The date and time the domain was created.
+        pub created_at: String,
+        /// The region where the domain is hosted.
+        pub region: Region,
+        /// The records of the domain.
+        pub records: Option<Vec<DomainRecord>>,
+
+        pub capabilities: DomainCapabilities,
+
+        /// Whether open tracking is enabled for this domain.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub open_tracking: Option<bool>,
+        /// Whether click tracking is enabled for this domain.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub click_tracking: Option<bool>,
+        /// The DNS zone the domain lives in (`acme.com` for `mail.acme.com`).
+        /// Record `host` values are relative to it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub dns_zone: Option<String>,
+    }
+
+    #[must_use]
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+    pub struct DomainCapabilities {
+        pub sending: DomainCapabilityStatus,
+        pub receiving: DomainCapabilityStatus,
+    }
+
+    #[non_exhaustive]
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum DomainCapabilityStatus {
+        Enabled,
+        Disabled,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct VerifyDomainResponse {
+        /// The ID of the domain.
+        #[allow(dead_code)]
+        pub id: DomainId,
+    }
+
+    /// List of changes to apply to a [`Domain`].
+    #[must_use]
+    #[derive(Debug, Default, Clone, Serialize)]
+    pub struct DomainChanges {
+        /// Enable or disable click tracking for the domain.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        click_tracking: Option<bool>,
+        /// Enable or disable open tracking for the domain.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        open_tracking: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tls: Option<Tls>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        capabilities: Option<DomainCapabilitiesOptions>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tracking_subdomain: Option<String>,
+    }
+
+    impl DomainChanges {
+        /// Creates a new [`DomainChanges`].
+        #[inline]
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        /// Toggles the click tracking to `enable`.
+        #[inline]
+        pub const fn with_click_tracking(mut self, enable: bool) -> Self {
+            self.click_tracking = Some(enable);
+            self
+        }
+
+        /// Toggles the open tracing to `enable`.
+        #[inline]
+        pub const fn with_open_tracking(mut self, enable: bool) -> Self {
+            self.open_tracking = Some(enable);
+            self
+        }
+
+        /// Changes the TLS configuration.
+        #[inline]
+        pub const fn with_tls(mut self, tls: Tls) -> Self {
+            self.tls = Some(tls);
+            self
+        }
+
+        #[inline]
+        pub fn with_tracking_subdomain(mut self, tracking_subdomain: impl Into<String>) -> Self {
+            self.tracking_subdomain = Some(tracking_subdomain.into());
+            self
+        }
+
+        /// Turns receiving on or off, e.g.
+        /// `DomainCapabilitiesOptions::new().with_receiving(DomainCapabilityStatus::Disabled)`.
+        ///
+        /// Off stops send.io accepting email for the domain; remove its MX record afterwards.
+        /// On asks for the domain's MX record; publish it to start receiving email. Sending
+        /// can't be disabled. See [`DomainCapabilitiesOptions`].
+        #[inline]
+        pub const fn with_capabilities(mut self, capabilities: DomainCapabilitiesOptions) -> Self {
+            self.capabilities = Some(capabilities);
+            self
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct UpdateDomainResponse {
+        /// The ID of the updated domain.
+        pub id: DomainId,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct DeleteDomainResponse {
+        /// The ID of the domain.
+        pub id: DomainId,
+        /// Indicates whether the domain was deleted successfully.
+        pub deleted: bool,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::needless_return)]
+mod test {
+    #[cfg(not(feature = "blocking"))]
+    use crate::{
+        domains::types::DeleteDomainResponse,
+        domains::types::{CreateDomainOptions, DomainChanges, Tls},
+        list_opts::ListOptions,
+        test::{CLIENT, DebugResult, retry},
+    };
+
+    #[tokio_shared_rt::test(shared = true)]
+    #[serial_test::serial]
+    #[cfg(not(feature = "blocking"))]
+    #[ignore = "live API test; run with `cargo test -- --ignored` and SENDIO_API_KEY set"]
+    async fn all() -> DebugResult<()> {
+        let sendio = &*CLIENT;
+
+        // Create
+        let domain = sendio
+            .domains
+            .create(CreateDomainOptions::new("sendio-rust.com"))
+            .await?;
+
+        std::thread::sleep(std::time::Duration::from_secs(4));
+
+        // List.
+        let list = sendio.domains.list(ListOptions::default()).await?;
+        assert_eq!(list.len(), 1);
+
+        // Get
+        let domain = sendio.domains.get(&domain.id).await?;
+
+        // Update
+        let updates = DomainChanges::new()
+            .with_open_tracking(false)
+            .with_click_tracking(true)
+            .with_tls(Tls::Enforced);
+
+        std::thread::sleep(std::time::Duration::from_secs(4));
+        let f = async || sendio.domains.update(&domain.id, updates.clone()).await;
+        let domain = retry(f, 5, std::time::Duration::from_secs(2)).await?;
+        std::thread::sleep(std::time::Duration::from_secs(4));
+
+        // Delete
+        let f = async || sendio.domains.delete(&domain.id).await;
+        let resp: DeleteDomainResponse = retry(f, 5, std::time::Duration::from_secs(2)).await?;
+
+        assert!(resp.deleted);
+
+        // List.
+        let list = sendio.domains.list(ListOptions::default()).await?;
+        assert!(list.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_create_domain_with_receiving_enabled() {
+        use crate::domains::types::{
+            CreateDomainOptions, DomainCapabilitiesOptions, DomainCapabilityStatus,
+        };
+
+        let opts = CreateDomainOptions::new("example.com").with_capabilities(
+            DomainCapabilitiesOptions::new().with_receiving(DomainCapabilityStatus::Enabled),
+        );
+
+        let json = serde_json::to_value(&opts).expect("Failed to serialize");
+        assert_eq!(
+            json,
+            serde_json::json!({ "name": "example.com", "capabilities": { "receiving": "enabled" } })
+        );
+    }
+
+    #[test]
+    fn serialize_create_domain_with_raw_capabilities_value() {
+        use crate::domains::types::CreateDomainOptions;
+
+        let opts = CreateDomainOptions::new("example.com")
+            .with_capabilities(serde_json::json!({ "sending": "enabled", "receiving": "enabled" }));
+
+        let json = serde_json::to_value(&opts).expect("Failed to serialize");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "name": "example.com",
+                "capabilities": { "sending": "enabled", "receiving": "enabled" }
+            })
+        );
+    }
+
+    #[test]
+    fn serialize_update_domain_with_receiving_disabled() {
+        use crate::domains::types::{
+            DomainCapabilitiesOptions, DomainCapabilityStatus, DomainChanges,
+        };
+
+        let changes = DomainChanges::new().with_capabilities(
+            DomainCapabilitiesOptions::new().with_receiving(DomainCapabilityStatus::Disabled),
+        );
+
+        let json = serde_json::to_value(&changes).expect("Failed to serialize");
+        assert_eq!(
+            json,
+            serde_json::json!({ "capabilities": { "receiving": "disabled" } })
+        );
+    }
+
+    #[test]
+    fn serialize_update_domain_with_receiving_enabled() {
+        use crate::domains::types::{
+            DomainCapabilitiesOptions, DomainCapabilityStatus, DomainChanges,
+        };
+
+        let changes = DomainChanges::new().with_capabilities(
+            DomainCapabilitiesOptions::new().with_receiving(DomainCapabilityStatus::Enabled),
+        );
+
+        let json = serde_json::to_value(&changes).expect("Failed to serialize");
+        assert_eq!(
+            json,
+            serde_json::json!({ "capabilities": { "receiving": "enabled" } })
+        );
+    }
+
+    #[test]
+    fn serialize_update_domain_without_capabilities_omits_key() {
+        use crate::domains::types::DomainChanges;
+
+        let changes = DomainChanges::new().with_open_tracking(false);
+
+        let json = serde_json::to_value(&changes).expect("Failed to serialize");
+        assert_eq!(json, serde_json::json!({ "open_tracking": false }));
+    }
+
+    #[test]
+    #[allow(clippy::indexing_slicing)]
+    fn deserialize_domain_with_tracking_caa_record() {
+        use crate::domains::types::{Domain, DomainRecord};
+
+        let json = r#"{
+            "object": "domain",
+            "id": "7c2a439f-d5fc-4dc1-8bab-ced17f14c972",
+            "name": "namingishard.dev",
+            "created_at": "2026-04-14T11:16:24.808219+00:00",
+            "status": "verified",
+            "capabilities": { "sending": "enabled", "receiving": "disabled" },
+            "records": [
+                {
+                    "record": "Tracking",
+                    "type": "CNAME",
+                    "name": "links",
+                    "value": "links1.sendio-dns-staging.com",
+                    "ttl": "Auto",
+                    "status": "verified"
+                },
+                {
+                    "record": "TrackingCAA",
+                    "name": "",
+                    "type": "CAA",
+                    "ttl": "Auto",
+                    "value": "0 issue \"amazon.com\"",
+                    "status": "verified"
+                }
+            ],
+            "region": "eu-west-1"
+        }"#;
+
+        let domain: Domain = serde_json::from_str(json).expect("domain deserializes");
+        let records = domain.records.expect("records present");
+        assert_eq!(records.len(), 2);
+        assert!(matches!(records[0], DomainRecord::TrackingRecord(_)));
+        assert!(matches!(records[1], DomainRecord::TrackingCaaRecord(_)));
+    }
+
+    #[test]
+    fn deserialize_domain_with_tracking_fields() {
+        use crate::domains::types::Domain;
+
+        let json = r#"{
+            "object": "domain",
+            "id": "fd61172c-cafc-40f5-b049-b45947779a29",
+            "name": "sendio.com",
+            "status": "verified",
+            "created_at": "2023-06-21T06:10:36.144+00:00",
+            "region": "us-east-1",
+            "capabilities": { "sending": "enabled", "receiving": "disabled" },
+            "open_tracking": true,
+            "click_tracking": false
+        }"#;
+
+        let domain: Domain = serde_json::from_str(json).expect("domain deserializes");
+        assert_eq!(domain.open_tracking, Some(true));
+        assert_eq!(domain.click_tracking, Some(false));
+    }
+
+    #[test]
+    fn deserialize_partially_verified_domain() {
+        use crate::domains::types::{Domain, DomainStatus};
+
+        let json = r#"{
+            "object": "domain",
+            "id": "fd61172c-cafc-40f5-b049-b45947779a29",
+            "name": "sendio.com",
+            "status": "partially_verified",
+            "created_at": "2023-06-21T06:10:36.144+00:00",
+            "region": "us-east-1",
+            "capabilities": { "sending": "enabled", "receiving": "disabled" }
+        }"#;
+
+        let domain: Domain = serde_json::from_str(json).expect("domain deserializes");
+        assert!(matches!(domain.status, DomainStatus::PartiallyVerified));
+    }
+
+    #[test]
+    fn deserialize_partially_failed_domain() {
+        use crate::domains::types::{Domain, DomainStatus};
+
+        let json = r#"{
+            "object": "domain",
+            "id": "fd61172c-cafc-40f5-b049-b45947779a29",
+            "name": "sendio.com",
+            "status": "partially_failed",
+            "created_at": "2023-06-21T06:10:36.144+00:00",
+            "region": "us-east-1",
+            "capabilities": { "sending": "enabled", "receiving": "enabled" }
+        }"#;
+
+        let domain: Domain = serde_json::from_str(json).expect("domain deserializes");
+        assert!(matches!(domain.status, DomainStatus::PartiallyFailed));
+    }
+
+    // SENDIO-341: a subdomain inside a parent zone carries the zone and the
+    // zone-relative host of each record.
+    #[test]
+    fn deserialize_domain_zone_names() {
+        use crate::domains::types::{Domain, DomainRecord};
+
+        let json = r#"{
+            "object": "domain",
+            "id": "fd61172c-cafc-40f5-b049-b45947779a29",
+            "name": "mail.acme.com",
+            "status": "pending",
+            "created_at": "2023-06-21T06:10:36.144+00:00",
+            "region": "us-east-1",
+            "dns_zone": "acme.com",
+            "capabilities": { "sending": "enabled", "receiving": "disabled" },
+            "records": [
+                { "record": "SPF", "name": "send", "host": "send.mail", "full_name": "send.mail.acme.com", "type": "CNAME", "ttl": "Auto", "status": "pending", "value": "rp.send.io" }
+            ]
+        }"#;
+
+        let domain: Domain = serde_json::from_str(json).expect("domain deserializes");
+        assert_eq!(domain.dns_zone.as_deref(), Some("acme.com"));
+        let records = domain.records.expect("records");
+        let DomainRecord::DomainSpfRecord(spf) = &records[0] else {
+            panic!("expected an SPF record");
+        };
+        assert_eq!(spf.name, "send");
+        assert_eq!(spf.host.as_deref(), Some("send.mail"));
+        assert_eq!(spf.full_name.as_deref(), Some("send.mail.acme.com"));
+    }
+}

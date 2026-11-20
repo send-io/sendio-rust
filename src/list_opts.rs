@@ -1,0 +1,145 @@
+use std::{collections::HashMap, ops::Index};
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Debug, Clone, Copy)]
+pub struct ListBefore {}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ListAfter {}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TimeNotSpecified {}
+
+pub trait AfterPagination {}
+
+impl AfterPagination for TimeNotSpecified {}
+
+impl AfterPagination for ListAfter {}
+
+/// Query parameters for retrieving a list of things.
+///
+/// Note that [`ListOptions::default()`] applies no filters.
+///
+/// See <https://developer.send.io/docs/api> for more information.
+///
+/// ## Example
+///
+/// ```
+/// # use sendio::list_opts::ListOptions;
+/// let list_opts = ListOptions::default()
+///   .with_limit(3)
+///   .list_before("71f170f3-826e-47e3-9128-a5958e3b375e");
+/// ```
+#[must_use]
+#[derive(Debug, Clone, Serialize)]
+pub struct ListOptions<List = TimeNotSpecified> {
+    #[serde(skip)]
+    list: std::marker::PhantomData<List>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit: Option<u8>,
+
+    #[serde(rename = "before")]
+    before_id: Option<String>,
+
+    #[serde(rename = "after")]
+    after_id: Option<String>,
+
+    #[serde(flatten)]
+    other: Option<HashMap<String, Value>>,
+}
+
+impl Default for ListOptions {
+    /// Applies no filters (old default behavior).
+    fn default() -> Self {
+        Self {
+            list: std::marker::PhantomData::<TimeNotSpecified>,
+            limit: None,
+            before_id: None,
+            after_id: None,
+            other: None,
+        }
+    }
+}
+
+impl<T> ListOptions<T> {
+    /// Number of things to retrieve. If no limit is provided then the default limit will be used
+    /// which varies from endpoint to endpoint, consult the specific method's documentation.
+    ///
+    /// - min: 1
+    /// - max: 100
+    #[inline]
+    pub const fn with_limit(mut self, limit: u8) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    /// Use this to add any arbitrary key value pairs.
+    pub fn with_other(mut self, key: &str, value: Value) -> Self {
+        let other = self.other.get_or_insert_with(HashMap::new);
+        let _old = other.insert(key.to_owned(), value);
+
+        self
+    }
+}
+
+impl ListOptions<TimeNotSpecified> {
+    /// The id before which we'll retrieve the items. This id will *not* be included in the list.
+    #[inline]
+    pub fn list_before(self, id: &str) -> ListOptions<ListBefore> {
+        ListOptions::<ListBefore> {
+            list: std::marker::PhantomData,
+            limit: self.limit,
+            before_id: Some(id.to_string()),
+            after_id: None,
+            other: self.other,
+        }
+    }
+
+    /// The id after which we'll retrieve the items. This id will *not* be included in the list.
+    #[inline]
+    pub fn list_after(self, id: &str) -> ListOptions<ListAfter> {
+        ListOptions::<ListAfter> {
+            list: std::marker::PhantomData,
+            limit: self.limit,
+            before_id: None,
+            after_id: Some(id.to_string()),
+            other: self.other,
+        }
+    }
+}
+
+/// Paginated response.
+///
+/// See <https://developer.send.io/docs/api> for more information.
+#[must_use]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListResponse<T> {
+    pub has_more: bool,
+    pub data: Vec<T>,
+}
+
+impl<T> Index<usize> for ListResponse<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        #[allow(clippy::indexing_slicing)]
+        &self.data[index]
+    }
+}
+
+impl<T> ListResponse<T> {
+    /// Equivalent to `self.data.is_empty()`.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// Equivalent to `self.data.len()`.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+}

@@ -1,0 +1,253 @@
+use std::fmt;
+use std::sync::Arc;
+
+use reqwest::Method;
+
+use crate::{Config, Result};
+use crate::{
+    list_opts::{ListOptions, ListResponse},
+    types::{ApiKey, ApiKeyToken, CreateApiKeyOptions, UpdateApiKeyOptions, UpdateApiKeyResponse},
+};
+
+/// `Sendio` APIs for `/api-keys` endpoints.
+#[derive(Clone)]
+pub struct ApiKeysSvc(pub(crate) Arc<Config>);
+
+impl ApiKeysSvc {
+    /// Add a new API key to authenticate communications with Sendio.
+    ///
+    /// <https://developer.send.io/docs/api>
+    #[maybe_async::maybe_async]
+    pub async fn create(&self, api_key: CreateApiKeyOptions) -> Result<ApiKeyToken> {
+        let request = self.0.build(Method::POST, "/api-keys");
+        let response = self.0.send(request.json(&api_key)).await?;
+        let content = response.json::<ApiKeyToken>().await?;
+
+        Ok(content)
+    }
+
+    /// Retrieve a list of API keys for the authenticated user.
+    ///
+    /// - Default limit: no limit (return everything)
+    ///
+    /// <https://developer.send.io/docs/api>
+    #[maybe_async::maybe_async]
+    pub async fn list<T>(&self, list_opts: ListOptions<T>) -> Result<ListResponse<ApiKey>> {
+        let request = self.0.build(Method::GET, "/api-keys").query(&list_opts);
+        let response = self.0.send(request).await?;
+        let content = response.json::<ListResponse<ApiKey>>().await?;
+
+        Ok(content)
+    }
+
+    /// Updates an existing API key.
+    ///
+    /// Only the name of the API key can be changed. Permission and domain access are fixed at
+    /// creation time and cannot be widened after the fact.
+    ///
+    /// <https://developer.send.io/docs/api>
+    #[maybe_async::maybe_async]
+    pub async fn update(
+        &self,
+        api_key_id: &str,
+        changes: UpdateApiKeyOptions,
+    ) -> Result<UpdateApiKeyResponse> {
+        let path = format!("/api-keys/{api_key_id}");
+
+        let request = self.0.build(Method::PATCH, &path);
+        let response = self.0.send(request.json(&changes)).await?;
+        let content = response.json::<UpdateApiKeyResponse>().await?;
+
+        Ok(content)
+    }
+
+    /// Remove an existing API key.
+    ///
+    /// <https://developer.send.io/docs/api>
+    #[maybe_async::maybe_async]
+    pub async fn delete(&self, api_key_id: &str) -> Result<()> {
+        let path = format!("/api-keys/{api_key_id}");
+
+        let request = self.0.build(Method::DELETE, &path);
+        let _response = self.0.send(request).await?;
+
+        Ok(())
+    }
+}
+
+impl fmt::Debug for ApiKeysSvc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+#[allow(unreachable_pub)]
+pub mod types {
+    use serde::{Deserialize, Serialize};
+
+    use crate::types::DomainId;
+
+    crate::define_id_type!(ApiKeyId);
+
+    /// Name and permissions of the new [`ApiKey`].
+    #[must_use]
+    #[derive(Debug, Clone, Serialize)]
+    pub struct CreateApiKeyOptions {
+        /// The API key name.
+        name: String,
+
+        /// The API key can have full access to Sendio’s API or be only restricted to send emails.
+        /// * `full_access` - Can create, delete, get, and update any resource.
+        /// * `sending_access` - Can only send emails.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        permission: Option<Permission>,
+        /// Restrict an API key to send emails only from a specific domain.
+        /// Only used when the permission is `sending_access`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        domain_id: Option<DomainId>,
+    }
+
+    impl CreateApiKeyOptions {
+        /// Creates a new [`CreateApiKeyOptions`].
+        #[inline]
+        pub fn new(name: &str) -> Self {
+            Self {
+                name: name.to_owned(),
+                permission: None,
+                domain_id: None,
+            }
+        }
+
+        /// The API key can have full access to Sendio’s API or be only restricted to send emails.
+        /// * `full_access` - Can create, delete, get, and update any resource.
+        /// * `sending_access` - Can only send emails.
+        #[inline]
+        pub const fn with_full_access(mut self) -> Self {
+            self.permission = Some(Permission::FullAccess);
+            self
+        }
+
+        /// Restricts an API key to only sending emails
+        #[inline]
+        pub const fn with_sending_access(mut self) -> Self {
+            self.permission = Some(Permission::SendingAccess);
+            self
+        }
+
+        /// Restricts an API key to send emails only from a specific domain.
+        #[inline]
+        pub fn with_domain_access(mut self, domain_id: &DomainId) -> Self {
+            self.permission = Some(Permission::SendingAccess);
+            self.domain_id = Some(domain_id.clone());
+            self
+        }
+    }
+
+    /// Full or restricted access of the [`ApiKey`].
+    ///
+    /// * `full_access` - Can create, delete, get, and update any resource.
+    /// * `sending_access` - Can only send emails.
+    #[must_use]
+    #[derive(Debug, Copy, Clone, Serialize)]
+    pub enum Permission {
+        #[serde(rename = "full_access")]
+        FullAccess,
+        #[serde(rename = "sending_access")]
+        SendingAccess,
+    }
+
+    /// Changes to apply to an existing [`ApiKey`].
+    ///
+    /// Only the name can be changed. `permission` and `domain_id` are deliberately not
+    /// patchable through this endpoint.
+    #[must_use]
+    #[derive(Debug, Clone, Serialize)]
+    pub struct UpdateApiKeyOptions {
+        /// The API key name.
+        name: String,
+    }
+
+    impl UpdateApiKeyOptions {
+        /// Creates a new [`UpdateApiKeyOptions`].
+        #[inline]
+        pub fn new(name: &str) -> Self {
+            Self {
+                name: name.to_owned(),
+            }
+        }
+    }
+
+    /// ID of the updated [`ApiKey`].
+    #[must_use]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct UpdateApiKeyResponse {
+        /// The ID of the updated API key.
+        pub id: ApiKeyId,
+    }
+
+    /// Token and ID of the newly created [`ApiKey`].
+    #[must_use]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ApiKeyToken {
+        /// The ID of the API key.
+        pub id: ApiKeyId,
+        /// The token of the API key.
+        pub token: String,
+    }
+
+    /// Name and ID of an existing API key.
+    #[must_use]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ApiKey {
+        /// The ID of the API key.
+        pub id: ApiKeyId,
+        /// The name of the API key.
+        pub name: String,
+        /// The date and time the API key was created.
+        pub created_at: String,
+        pub last_used_at: Option<String>,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::needless_return)]
+mod test {
+    #[cfg(not(feature = "blocking"))]
+    use crate::{
+        list_opts::ListOptions,
+        test::{CLIENT, DebugResult},
+        types::{CreateApiKeyOptions, UpdateApiKeyOptions},
+    };
+
+    #[tokio_shared_rt::test(shared = true)]
+    #[serial_test::serial]
+    #[cfg(not(feature = "blocking"))]
+    #[ignore = "live API test; run with `cargo test -- --ignored` and SENDIO_API_KEY set"]
+    async fn all() -> DebugResult<()> {
+        let sendio = &*CLIENT;
+
+        let api_key = "test_";
+
+        // Create.
+        let request = CreateApiKeyOptions::new(api_key).with_full_access();
+        let response = sendio.api_keys.create(request).await?;
+        let id = response.id;
+
+        // List.
+        let api_keys = sendio.api_keys.list(ListOptions::default()).await?;
+        let api_keys_amt = api_keys.len();
+
+        let update = UpdateApiKeyOptions::new("test_renamed");
+        let response = sendio.api_keys.update(&id, update).await?;
+        assert_eq!(response.id, id);
+
+        // Delete.
+        sendio.api_keys.delete(&id).await?;
+
+        // List.
+        let api_keys = sendio.api_keys.list(ListOptions::default()).await?;
+        assert_eq!(api_keys_amt, api_keys.len() + 1);
+
+        Ok(())
+    }
+}

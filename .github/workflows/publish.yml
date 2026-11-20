@@ -1,0 +1,53 @@
+# Publishes the sendio crate to crates.io when a vX.Y.Z tag lands on the public
+# copy of this SDK (send-io/sendio-rust), with the API token in the
+# CARGO_REGISTRY_TOKEN secret.
+# Later upgrade: crates.io trusted publishing (OIDC), which needs no stored token.
+#
+# A manual run only checks that crates.io accepts the token for a publish. It
+# builds and publishes nothing.
+
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tag must match Cargo.toml version
+        run: test "v$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')" = "$GITHUB_REF_NAME"
+      - run: cargo test
+      - run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  crates-token-check:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      # crates.io has no read-only check for API tokens. This sends the publish
+      # request cargo makes, for version 0.0.0 with an empty tarball, which can
+      # never be published. crates.io checks the token first: 401 or 403 means
+      # refused, 400 about the tarball means accepted. Prints crates.io's
+      # answer, never the token (this log is public).
+      - name: Ask crates.io whether it accepts the token for a publish
+        env:
+          TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -eu
+          meta='{"name":"sendio","vers":"0.0.0","deps":[],"features":{},"authors":[],"description":null,"documentation":null,"homepage":null,"readme":null,"readme_file":null,"keywords":[],"categories":[],"license":"MIT","license_file":null,"repository":null,"badges":{},"links":null}'
+          python3 -c 'import struct,sys; m=sys.argv[1].encode(); sys.stdout.buffer.write(struct.pack("<I",len(m))+m+struct.pack("<I",0))' "$meta" > body.bin
+          code=$(curl -sS -o resp.json -w '%{http_code}' -X PUT -H "Authorization: $TOKEN" -H 'User-Agent: sendio-rust publish check' --data-binary @body.bin https://crates.io/api/v1/crates/new)
+          msg=$(head -c 300 resp.json); rm -f resp.json body.bin
+          if [ "$code" = 400 ] && echo "$msg" | grep -q tarball; then echo "crates.io: HTTP $code, the token is accepted ($msg)"
+          else echo "crates.io: HTTP $code $msg"; exit 1; fi
